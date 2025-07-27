@@ -100,6 +100,7 @@ pub struct GitSettings {
     pub executable_path: PathBuf,
     pub record_synthetic_predecessors: bool,
     pub write_change_id_header: bool,
+    pub ignore_filters: Vec<String>,
 }
 
 impl GitSettings {
@@ -110,6 +111,10 @@ impl GitSettings {
             record_synthetic_predecessors: settings
                 .get_bool("git.record-synthetic-predecessors")?,
             write_change_id_header: settings.get("git.write-change-id-header")?,
+            ignore_filters: settings
+                .get("git.ignore-filters")
+                .optional()?
+                .unwrap_or_else(|| vec!["lfs".to_string()]),
         })
     }
 
