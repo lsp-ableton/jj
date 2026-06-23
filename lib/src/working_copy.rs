@@ -27,7 +27,6 @@ use tracing::instrument;
 
 use crate::backend::BackendError;
 use crate::commit::Commit;
-use crate::dag_walk_async;
 use crate::gitattributes::GitAttributesError;
 use crate::gitignore::GitIgnoreError;
 use crate::gitignore::GitIgnoreFile;

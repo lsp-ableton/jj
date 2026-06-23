@@ -16,23 +16,22 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::fs::File;
 use std::io::ErrorKind;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use futures::AsyncRead;
+use futures::AsyncReadExt as _;
 use gix_attributes::Search;
 use gix_attributes::State;
 use gix_attributes::glob::pattern::Case;
 use gix_attributes::search::MetadataCollection;
 use gix_attributes::search::Outcome;
-use tokio::io::AsyncRead;
-use tokio::io::AsyncReadExt as _;
 use tokio::sync::OnceCell;
 
 use crate::backend::TreeValue;
-use crate::file_util::BlockingAsyncReader;
 use crate::merge::SameChange;
 use crate::merged_tree::MergedTree;
 use crate::repo_path::RepoPath;
@@ -60,7 +59,7 @@ pub(crate) trait FileLoader: Send + Sync {
     async fn load(
         &self,
         path: &RepoPath,
-    ) -> Result<Option<Box<dyn AsyncRead + Send + Unpin>>, GitAttributesError>;
+    ) -> Result<Option<Pin<Box<dyn AsyncRead + Send>>>, GitAttributesError>;
 }
 
 pub(crate) struct TreeFileLoader {
@@ -77,7 +76,7 @@ impl FileLoader for TreeFileLoader {
     async fn load(
         &self,
         path: &RepoPath,
-    ) -> Result<Option<Box<dyn AsyncRead + Send + Unpin>>, GitAttributesError> {
+    ) -> Result<Option<Pin<Box<dyn AsyncRead + Send>>>, GitAttributesError> {
         let merged_tree_value =
             self.tree
                 .path_value(path)
@@ -117,7 +116,8 @@ impl FileLoader for TreeFileLoader {
                     message: "Could not retrieve the value from path".to_string(),
                     source: err.into(),
                 })?;
-        Ok(Some(Box::new(result)))
+        // `Store::read_file` already yields a `Pin<Box<dyn futures::AsyncRead>>`.
+        Ok(Some(result))
     }
 }
 
@@ -136,7 +136,7 @@ impl FileLoader for DiskFileLoader {
     async fn load(
         &self,
         path: &RepoPath,
-    ) -> Result<Option<Box<dyn AsyncRead + Send + Unpin>>, GitAttributesError> {
+    ) -> Result<Option<Pin<Box<dyn AsyncRead + Send>>>, GitAttributesError> {
         let path = path
             .to_fs_path(&self.repo_root)
             .map_err(|err| GitAttributesError {
@@ -159,8 +159,11 @@ impl FileLoader for DiskFileLoader {
             return Ok(None);
         }
 
-        let file = match File::open(&path) {
-            Ok(file) => file,
+        // .gitattributes files are tiny; read fully and wrap in an in-memory
+        // async reader. jj 0.42's store readers are `futures::AsyncRead`, so the
+        // disk loader matches that rather than the removed `BlockingAsyncReader`.
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
             Err(err) => {
                 return Err(GitAttributesError {
@@ -169,7 +172,7 @@ impl FileLoader for DiskFileLoader {
                 });
             }
         };
-        Ok(Some(Box::new(BlockingAsyncReader::new(file))))
+        Ok(Some(Box::pin(futures::io::Cursor::new(bytes))))
     }
 }
 
@@ -438,7 +441,7 @@ mod tests {
         async fn load(
             &self,
             path: &RepoPath,
-        ) -> Result<Option<Box<dyn AsyncRead + Send + Unpin>>, GitAttributesError> {
+        ) -> Result<Option<Pin<Box<dyn AsyncRead + Send>>>, GitAttributesError> {
             let Some(mocked_result) = self.get(path) else {
                 return Ok(None);
             };
