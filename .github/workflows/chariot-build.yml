@@ -1,0 +1,45 @@
+name: chariot-build
+
+# Builds the chariot LFS-filtering jj fork for macOS (Apple Silicon + Intel)
+# and uploads per-arch tarballs. Triggered manually via `gh workflow run`.
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14   # Apple Silicon
+            arch: aarch64
+          - runner: macos-13   # Intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: |
+          rustup update stable
+          rustup default stable
+          rustc -vV
+
+      - name: Build jj (release)
+        run: cargo build --release --bin jj
+
+      - name: Verify arch + fork marker
+        run: |
+          file target/release/jj
+          ./target/release/jj --version
+          ./target/release/jj --version | grep -q chariot-lfs
+
+      - name: Package tarball
+        run: tar -czf "jj-${{ matrix.arch }}.tar.gz" -C target/release jj
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jj-${{ matrix.arch }}
+          path: jj-${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
