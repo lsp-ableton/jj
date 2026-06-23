@@ -1,21 +1,15 @@
 name: chariot-build
 
-# Builds the chariot LFS-filtering jj fork for macOS (Apple Silicon + Intel)
-# and uploads per-arch tarballs. Triggered manually via `gh workflow run`.
+# Builds the chariot LFS-filtering jj fork for macOS (Apple Silicon + Intel).
+# Both arches are built on a single arm64 runner via cross-compilation so we
+# don't depend on scarce macos-13 (Intel) runner scheduling.
+# Triggered manually via `gh workflow run`.
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-14   # Apple Silicon
-            arch: aarch64
-          - runner: macos-13   # Intel
-            arch: x86_64
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-14 # Apple Silicon
     steps:
       - uses: actions/checkout@v4
 
@@ -23,23 +17,31 @@ jobs:
         run: |
           rustup update stable
           rustup default stable
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
           rustc -vV
 
-      - name: Build jj (release)
-        run: cargo build --release --bin jj
+      - name: Build jj (both arches)
+        run: |
+          cargo build --release --target aarch64-apple-darwin --bin jj
+          cargo build --release --target x86_64-apple-darwin --bin jj
 
       - name: Verify arch + fork marker
         run: |
-          file target/release/jj
-          ./target/release/jj --version
-          ./target/release/jj --version | grep -q chariot-lfs
+          file target/aarch64-apple-darwin/release/jj
+          file target/x86_64-apple-darwin/release/jj
+          # Only the native arm64 binary is runnable here; trust the x86_64
+          # build (same source) and confirm its Mach-O arch via `file` above.
+          target/aarch64-apple-darwin/release/jj --version
+          target/aarch64-apple-darwin/release/jj --version | grep -q chariot-lfs
 
-      - name: Package tarball
-        run: tar -czf "jj-${{ matrix.arch }}.tar.gz" -C target/release jj
+      - name: Package tarballs
+        run: |
+          tar -czf jj-aarch64.tar.gz -C target/aarch64-apple-darwin/release jj
+          tar -czf jj-x86_64.tar.gz  -C target/x86_64-apple-darwin/release  jj
 
-      - name: Upload artifact
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: jj-${{ matrix.arch }}
-          path: jj-${{ matrix.arch }}.tar.gz
+          name: jj-binaries
+          path: jj-*.tar.gz
           if-no-files-found: error
